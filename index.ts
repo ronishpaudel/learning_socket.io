@@ -15,22 +15,37 @@ app.get("/", (req, res) => {
 });
 
 io.on("connection", async (socket) => {
-  socket.on("chat message", async (msg) => {
+  socket.on("chat message", async (msg, clientOffset, callback) => {
     let result;
     try {
       const db = getDb();
-      // store the message in the database
-      result = await db.run("INSERT INTO messages (content) VALUES (?)", msg);
+      // Store the message in the database
+      result = await db.run(
+        "INSERT INTO messages (content, client_offset) VALUES (?, ?)",
+        msg,
+        clientOffset
+      );
     } catch (e) {
-      // TODO handle the failure
+      if (
+        e instanceof Error &&
+        (e as any).errno === 19 /* SQLITE_CONSTRAINT */
+      ) {
+        // The message was already inserted, so we notify the client
+        callback();
+      } else {
+        console.error("Database error: ", e);
+        // Nothing to do, just let the client retry
+      }
       return;
     }
-    // include the offset with the message
+    // Include the offset with the message
     io.emit("chat message", msg, result.lastID);
+    // Acknowledge the event
+    callback();
   });
 
   if (!socket.recovered) {
-    // if the connection state recovery was not successful
+    // If the connection state recovery was not successful
     try {
       const db = getDb();
       await db.each(
@@ -41,7 +56,7 @@ io.on("connection", async (socket) => {
         }
       );
     } catch (e) {
-      // something went wrong
+      console.error("Database query error: ", e);
     }
   }
 });
